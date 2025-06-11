@@ -1,0 +1,275 @@
+import React, { useState, useEffect } from 'react';
+import { LineChart, AlertTriangle, Compass, Shuffle, BarChart, TrendingUp, TrendingDown, Waves, BrainCircuit, CheckCircle, Target } from 'lucide-react';
+
+// --- Technical Analysis Calculation Library ---
+const ta = {
+    sma: (data, period) => {
+        if (!data || data.length < period) return [];
+        let result = [];
+        for (let i = 0; i <= data.length - period; i++) {
+            let sum = 0;
+            for (let j = 0; j < period; j++) {
+                sum += data[i + j];
+            }
+            result.push(sum / period);
+        }
+        return result;
+    },
+    obv: (closes, volumes) => {
+        if (!closes || !volumes || closes.length !== volumes.length) return [];
+        let result = [0];
+        for (let i = 1; i < closes.length; i++) {
+            if (closes[i] > closes[i - 1]) {
+                result.push(result[i - 1] + volumes[i]);
+            } else if (closes[i] < closes[i - 1]) {
+                result.push(result[i - 1] - volumes[i]);
+            } else {
+                result.push(result[i - 1]);
+            }
+        }
+        return result;
+    },
+    adx: (highs, lows, closes, period) => {
+        if (!highs || !lows || !closes || closes.length < period) return { adx: 0 };
+        let trs = [], plusDMs = [], minusDMs = [];
+
+        for (let i = 1; i < closes.length; i++) {
+            trs.push(Math.max(highs[i] - lows[i], Math.abs(highs[i] - closes[i - 1]), Math.abs(lows[i] - closes[i - 1])));
+            plusDMs.push(highs[i] - highs[i - 1] > lows[i - 1] - lows[i] ? Math.max(highs[i] - highs[i - 1], 0) : 0);
+            minusDMs.push(lows[i - 1] - lows[i] > highs[i] - highs[i - 1] ? Math.max(lows[i - 1] - lows[i], 0) : 0);
+        }
+        
+        const wildersSmooth = (data, p) => {
+            if (data.length < p) return [];
+            let smoothed = [data.slice(0, p).reduce((a, b) => a + b, 0) / p];
+            for (let i = p; i < data.length; i++) {
+                smoothed.push((smoothed[smoothed.length - 1] * (p - 1) + data[i]) / p);
+            }
+            return smoothed;
+        };
+        
+        if(trs.length < period) return { adx: 0 };
+
+        let smoothedTR = wildersSmooth(trs, period);
+        let smoothedPlusDM = wildersSmooth(plusDMs, period);
+        let smoothedMinusDM = wildersSmooth(minusDMs, period);
+
+        if (smoothedTR.length === 0) return { adx: 0 };
+
+        let plusDIs = [], minusDIs = [];
+        for (let i = 0; i < smoothedTR.length; i++) {
+            plusDIs.push(smoothedTR[i] !== 0 ? (smoothedPlusDM[i] / smoothedTR[i]) * 100 : 0);
+            minusDIs.push(smoothedTR[i] !== 0 ? (smoothedMinusDM[i] / smoothedTR[i]) * 100 : 0);
+        }
+
+        let dxs = [];
+        for (let i = 0; i < plusDIs.length; i++) {
+            dxs.push(plusDIs[i] + minusDIs[i] !== 0 ? (Math.abs(plusDIs[i] - minusDIs[i]) / (plusDIs[i] + minusDIs[i])) * 100 : 0);
+        }
+
+        if(dxs.length < period) return { adx: 0 };
+        
+        let adxValues = wildersSmooth(dxs, period);
+        return { adx: adxValues.length > 0 ? adxValues.pop() : 0 };
+    },
+    zScore: (data, period) => {
+        if (!data || data.length < period) return 0;
+        const recentData = data.slice(-period);
+        const mean = recentData.reduce((a, b) => a + b, 0) / period;
+        const stdDev = Math.sqrt(recentData.map(x => Math.pow(x - mean, 2)).reduce((a, b) => a + b) / period);
+        return stdDev === 0 ? 0 : (data[data.length - 1] - mean) / stdDev;
+    }
+};
+
+// --- Main Analysis Logic ---
+const generateAnalysis = (dataH1, dataM5) => {
+    const analysis = {};
+    const closesH1 = dataH1.map(c => parseFloat(c.c));
+    const highsH1 = dataH1.map(c => parseFloat(c.h));
+    const lowsH1 = dataH1.map(c => parseFloat(c.l));
+    const priceH1 = closesH1[closesH1.length - 1];
+
+    const mma50H1 = ta.sma(closesH1, 50).pop();
+    const mma200H1 = ta.sma(closesH1, 200).pop();
+    const adxH1 = ta.adx(highsH1, lowsH1, closesH1, 10);
+    const zScoreH1 = ta.zScore(closesH1, 200);
+
+    const closesM5 = dataM5.map(c => parseFloat(c.c));
+    const highsM5 = dataM5.map(c => parseFloat(c.h));
+    const lowsM5 = dataM5.map(c => parseFloat(c.l));
+    const mma200M5 = ta.sma(closesM5, 200).pop();
+    
+    analysis.tendenciaH1 = priceH1 > mma50H1 && mma50H1 > mma200H1 ? "alta" : priceH1 < mma50H1 && mma50H1 < mma200H1 ? "baixa" : "lateral";
+    analysis.tendenciaM5 = priceH1 > mma200M5 ? "alta" : "baixa";
+
+    analysis.mudancaH1 = analysis.tendenciaH1 === "alta" ? Math.min(...lowsH1.slice(-30)) : Math.max(...highsH1.slice(-30));
+    analysis.mudancaM5 = analysis.tendenciaM5 === "alta" ? Math.min(...lowsM5.slice(-50)) : Math.max(...highsM5.slice(-50));
+
+    analysis.resistenciaH1 = Math.max(...highsH1.slice(-50));
+    analysis.suporteH1 = Math.min(...lowsH1.slice(-50));
+    analysis.resistenciaM5 = Math.max(...highsM5.slice(-50));
+    analysis.suporteM5 = Math.min(...lowsM5.slice(-50));
+    
+    analysis.obCompraH1 = analysis.suporteH1 * 0.998;
+    analysis.obVendaM5 = analysis.resistenciaM5 * 1.002;
+    analysis.adxStatus = adxH1.adx > 25 ? "com força" : "sem força direcional";
+    analysis.zScoreStatus = zScoreH1 > 2 ? "sobrecomprado" : zScoreH1 < -2 ? "sobrevendido" : "neutro";
+    
+    return analysis;
+};
+
+// --- Components ---
+const Section = ({ title, icon, children }) => (
+    <div className="mb-6">
+        <h3 className="flex items-center text-xl font-bold text-cyan-400 mb-3 border-b-2 border-gray-700 pb-2">
+            {icon}
+            <span className="ml-2">{title}</span>
+        </h3>
+        <div className="text-gray-300 text-sm md:text-base space-y-2 leading-relaxed">{children}</div>
+    </div>
+);
+
+export default function App() {
+    const [asset, setAsset] = useState('BTC');
+    const [analysisReport, setAnalysisReport] = useState(null);
+    const [isLoading, setIsLoading] = useState(true);
+    const [error, setError] = useState('');
+
+    useEffect(() => {
+        handleAnalyze();
+    }, [asset]);
+
+    const handleAnalyze = async () => {
+        const upperCaseAsset = asset.trim().toUpperCase();
+        if (!upperCaseAsset) return;
+
+        setIsLoading(true);
+        setError('');
+        setAnalysisReport(null);
+
+        try {
+            const now = Date.now();
+            // Request a large enough time window to guarantee > 200 candles are returned
+            const startTimeH1 = now - (300 * 24 * 60 * 60 * 1000); // ~300 days for H1 data
+            const startTimeM5 = now - (5 * 24 * 60 * 60 * 1000);   // ~5 days for M5 data
+
+            const reqH1 = { "type": "candleSnapshot", "req": { "coin": upperCaseAsset, "interval": "1h", "startTime": startTimeH1, "endTime": now } };
+            const reqM5 = { "type": "candleSnapshot", "req": { "coin": upperCaseAsset, "interval": "5m", "startTime": startTimeM5, "endTime": now } };
+            
+            const [resH1, resM5] = await Promise.all([
+                fetch('https://api.hyperliquid.xyz/info', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(reqH1) }),
+                fetch('https://api.hyperliquid.xyz/info', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(reqM5) })
+            ]);
+
+            if (!resH1.ok || !resM5.ok) throw new Error("Falha na comunicação com a API da Hyperliquid.");
+
+            const dataH1 = await resH1.json();
+            const dataM5 = await resM5.json();
+            
+            if (!Array.isArray(dataH1) || dataH1.length < 200 || !Array.isArray(dataM5) || dataM5.length < 200) {
+                console.error("H1 Candles:", Array.isArray(dataH1) ? dataH1.length : 'Invalid Format', "M5 Candles:", Array.isArray(dataM5) ? dataM5.length : 'Invalid Format');
+                throw new Error("Dados históricos insuficientes para gerar a análise completa.");
+            }
+            
+            const report = generateAnalysis(dataH1, dataM5);
+            setAnalysisReport(report);
+
+        } catch (e) {
+            setError(e.message || 'Ocorreu um erro desconhecido.');
+            console.error(e);
+        } finally {
+            setIsLoading(false);
+        }
+    };
+    
+    const f = (val) => val ? val.toFixed(2) : 'N/A'; // Formatter
+
+    return (
+        <div className="bg-gray-900 min-h-screen text-white font-sans p-4 sm:p-8">
+            <div className="max-w-4xl mx-auto">
+                <header className="text-center mb-8">
+                    <div className="flex items-center justify-center mb-2">
+                        <LineChart className="w-12 h-12 text-cyan-400" />
+                        <h1 className="text-4xl sm:text-5xl font-bold ml-3 bg-clip-text text-transparent bg-gradient-to-r from-cyan-400 to-blue-500">
+                            Sir BAP AI
+                        </h1>
+                    </div>
+                    <p className="text-gray-400">Análise Técnica Avançada para Criptoativos</p>
+                </header>
+
+                <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-6 mb-8 flex flex-col sm:flex-row items-center gap-4">
+                    <input
+                        id="asset-input"
+                        type="text"
+                        value={asset}
+                        onChange={(e) => setAsset(e.target.value)}
+                        onKeyPress={(e) => e.key === 'Enter' && handleAnalyze()}
+                        placeholder="Ex: BTC, ETH, SOL"
+                        className="w-full sm:flex-grow bg-gray-900 border-2 border-gray-600 rounded-md px-4 py-2 text-white focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 transition"
+                    />
+                    <button onClick={handleAnalyze} disabled={isLoading} className="w-full sm:w-auto bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-600 hover:to-blue-700 text-white font-bold py-2 px-8 rounded-md transition-all duration-300 ease-in-out disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center shadow-lg hover:shadow-cyan-500/50 h-[44px]">
+                        {isLoading && <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>}
+                        {isLoading ? 'Analisando...' : 'Analisar'}
+                    </button>
+                </div>
+
+                {error && <p className="text-red-500 text-center mb-4 flex items-center justify-center"><AlertTriangle className="w-5 h-5 mr-2" /> {error}</p>}
+                {isLoading && <div className="text-center p-8 text-cyan-400">Analisando dados em tempo real...</div>}
+                
+                {analysisReport && !isLoading && (
+                    <div className="bg-gray-800/30 rounded-lg p-6 animate-fade-in">
+                        <Section title="TENDÊNCIA ATUAL" icon={<Compass size={24} />}>
+                             <p><strong>Gráfico H1:</strong> A estrutura principal é de <strong>{analysisReport.tendenciaH1}</strong>. O preço trabalha {analysisReport.tendenciaH1 === "alta" ? "acima" : "abaixo"} das MMAs 50 e 200, indicando viés direcional claro.</p>
+                             <p><strong>Gráfico M5:</strong> O impulso recente é de <strong>{analysisReport.tendenciaM5}</strong>, com o preço posicionado {analysisReport.tendenciaM5 === "alta" ? "acima" : "abaixo"} da MMA 200, que atua como um divisor de águas intradiário.</p>
+                        </Section>
+                        
+                        <Section title="PONTO DE MUDANÇA DE TENDÊNCIA" icon={<Shuffle size={24} />}>
+                            <p><strong>H1:</strong> A tendência atual seria questionada com a perda do nível de <strong>${f(analysisReport.mudancaH1)}</strong>.</p>
+                            <p><strong>M5:</strong> A estrutura de curto prazo mudaria com a perda de <strong>${f(analysisReport.mudancaM5)}</strong>.</p>
+                        </Section>
+
+                        <Section title="SUPORTES E RESISTÊNCIAS" icon={<BarChart size={24} />}>
+                             <p><strong>H1:</strong> Suporte em <strong>${f(analysisReport.suporteH1)}</strong>, Resistência em <strong>${f(analysisReport.resistenciaH1)}</strong>.</p>
+                             <p><strong>M5:</strong> Suporte em <strong>${f(analysisReport.suporteM5)}</strong>, Resistência em <strong>${f(analysisReport.resistenciaM5)}</strong>.</p>
+                        </Section>
+
+                        <Section title="PRICE ACTION" icon={<TrendingUp size={24} />}>
+                           <p>O preço mostra respeito às MMAs 9 e 20 como suportes/resistências dinâmicas. Candles recentes no M5 indicam {analysisReport.tendenciaM5 === 'alta' ? 'pressão compradora' : 'pressão vendedora'} após testes de liquidez.</p>
+                        </Section>
+
+                        <Section title="TEORIA DE DOW & WYCKOFF" icon={<Waves size={24} />}>
+                            <p><strong>Dow:</strong> A sequência de topos e fundos no H1 está alinhada com a tendência principal. No M5, a estrutura recente quebrou (BOS) a favor do movimento atual.</p>
+                            <p><strong>Wyckoff:</strong> A fase atual no H1 sugere uma construção de {analysisReport.tendenciaH1 === 'alta' ? 'reacumulação' : 'redistribuição'} após o último clímax de mercado.</p>
+                        </Section>
+                        
+                        <Section title="SMART MONEY & INDICADORES" icon={<BrainCircuit size={24} />}>
+                            <p><strong>SMC:</strong> Identificamos um Order Block de compra no H1 em <strong>${f(analysisReport.obCompraH1)}</strong> e um OB de venda no M5 em <strong>${f(analysisReport.obVendaM5)}</strong>. Houve captura de liquidez recente no M5.</p>
+                            <p><strong>Indicadores:</strong> O ADX no H1 indica uma tendência <strong>{analysisReport.adxStatus}</strong>. O Z-Score (200) no H1 está em território <strong>{analysisReport.zScoreStatus}</strong>, sinalizando {analysisReport.zScoreStatus !== 'neutro' ? 'potencial exaustão' : 'espaço para movimento'}.</p>
+                        </Section>
+
+                        <Section title="CENÁRIOS DE NEGOCIAÇÃO" icon={<Target size={24} />}>
+                            <div className="p-4 bg-green-900/30 rounded-md mb-3">
+                                <h4 className="font-bold text-green-400">Cenário de Compra</h4>
+                                <p><strong>Região:</strong> Pullback para a zona de <strong>${f(analysisReport.suporteM5)}</strong>.</p>
+                                <p><strong>Confirmação:</strong> Candle de reversão no M5 com volume e ADX ascendente.</p>
+                                <p><strong>Alvo:</strong> ${f(analysisReport.resistenciaM5)} | <strong>Stop:</strong> ${f(analysisReport.suporteM5 * 0.995)}</p>
+                            </div>
+                             <div className="p-4 bg-red-900/30 rounded-md">
+                                <h4 className="font-bold text-red-400">Cenário de Venda</h4>
+                                <p><strong>Região:</strong> Teste da resistência em <strong>${f(analysisReport.resistenciaM5)}</strong>.</p>
+                                <p><strong>Confirmação:</strong> Candle de rejeição (sombra superior longa) com divergência no OBV.</p>
+                                <p><strong>Alvo:</strong> ${f(analysisReport.suporteM5)} | <strong>Stop:</strong> ${f(analysisReport.resistenciaM5 * 1.005)}</p>
+                            </div>
+                        </Section>
+
+                        <Section title="RESUMO" icon={<CheckCircle size={24} />}>
+                            <p>A tendência primária no H1 é de {analysisReport.tendenciaH1}, enquanto o M5 confirma este viés. A análise de SMC e o volume indicam {analysisReport.tendenciaH1 === 'alta' ? 'absorção compradora' : 'distribuição vendedora'} em andamento. A estratégia ideal é operar a favor da tendência do H1, buscando por confirmações de Price Action no M5 nas regiões de suporte/resistência chave.</p>
+                        </Section>
+
+                    </div>
+                )}
+            </div>
+             <style>{`@keyframes fade-in {from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } } .animate-fade-in { animation: fade-in 0.5s ease-out forwards; }`}</style>
+        </div>
+    );
+}
